@@ -236,6 +236,7 @@ def get_samples_json(target_id=None):
 
     return elem_json
 
+
 def get_datafiles_json(target_id=None):
     """
     returns all datafile record

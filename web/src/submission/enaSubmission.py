@@ -1,11 +1,13 @@
 __author__ = 'felix.shaw@tgac.ac.uk - 03/05/2016'
 
-import converters.ena.copo_isa_ena as cnv
+import json
 from bson.json_util import dumps
+from bson import json_util
 from tools import resolve_env
 from django.conf import settings
 from dal.copo_da import DataFile
-from dal.copo_da import RemoteDataFile, Submission, Profile
+import converters.ena.copo_isa_ena as cnv
+from dal.copo_da import RemoteDataFile, Submission
 
 from web.apps.web_copo.lookup.copo_enums import *
 
@@ -27,249 +29,169 @@ import web.apps.web_copo.schemas.utils.data_utils as d_utils
 
 
 class EnaSubmit(object):
-    def __init__(self):
+    def __init__(self, submission_id=str(), status=str()):
+        """
+        the submission module breaks tasks into smaller 'callable' chunks to deal with the gunicorn timeout issue
+        :param submission_id:
+        :param status:
+        """
         self._dir = os.path.join(os.path.dirname(__file__), "data")
         self._config_dir = os.path.join(self._dir, "Configurations/isaconfig-default_v2015-07-02")
         self.d_files = []
-        self.profile = str()
-        self.submission = dict()
+        self.submission_id = submission_id
+        self.transfer_token = str()
+        self.context = dict()
+        self.status = status  # status or the stage the submission has reached
+        self.dispatcher = {
+            'commenced': self._do_file_transfer,
+            'files_transferred': self._do_collate_copo_records,
+            'collated_records': self._do_copojson2isajson,
+            'generated_isajson': self._convert_to_sra,
+            'converted_to_sra': self._submit_to_sra
+        }
+        self.submission_sequence = ["commenced", "files_transferred", "collated_records", "generated_isajson",
+                                    "converted_to_sra", "completed"]
 
-    def submit(self, sub_id, dataFile_ids):
-        submission_record = Submission().get_record(sub_id)
-
-        # bundle_meta, if present, should provide a better picture of what datafiles need to be uploaded
-        if "bundle_meta" in submission_record:
-            pending_files = [x["file_id"] for x in submission_record['bundle_meta'] if not x["upload_status"]]
-            dataFile_ids = pending_files
-
-        # physically transfer files
-        path2library = os.path.join(BASE_DIR, REPOSITORIES['ASPERA']['resource_path'])
-
-        # change these to be collected properly
-        user_name = REPOSITORIES['ASPERA']['user_token']
-        password = REPOSITORIES['ASPERA']['password']
-
-        # create transfer record
-        transfer_token = RemoteDataFile().create_transfer(sub_id)['_id']
-        self.submission = Submission().get_record(sub_id)
-
-        self.profile = Profile().get_record(self.submission['profile_id'])
-        remote_path = d_utils.get_ena_remote_path(sub_id)
-
-        # get each file in the bundle
-        file_path = []
-        for idx, f_id in enumerate(dataFile_ids):
-            mongo_file = DataFile().get_record(f_id)
-            self.d_files.append(mongo_file)
-            file_path.append(mongo_file.get("file_location", str()))
-
-        case = self._do_aspera_transfer(transfer_token=transfer_token,
-                                        user_name=user_name,
-                                        password=password,
-                                        remote_path=remote_path,
-                                        file_path=file_path,
-                                        path2library=path2library,
-                                        sub_id=sub_id)
-        return case
-
-    def _do_aspera_transfer(self, transfer_token=None, user_name=None, password=None, remote_path=None, file_path=None,
-                            path2library=None, sub_id=None):
-
+    def submit(self):
         # check submission status
-        submission_status = Submission().isComplete(sub_id)
+        submission_status = Submission().isComplete(self.submission_id)
 
         if str(submission_status).lower() == 'true':  # submission already done
-            RemoteDataFile().delete_transfer(transfer_token)
-            return True
+            self.context["ena_status"] = "completed"
 
-        if file_path:  # there are files to be uploaded to ENA's Dropbox
+            return
 
-            lg.log('Starting aspera transfer', level=Loglvl.INFO, type=Logtype.FILE)
+        # is there an existing transfer token?
+        rem = RemoteDataFile().get_by_sub_id(self.submission_id)
+        if rem:
+            self.transfer_token = str(rem["_id"])
+        else:
+            # create transfer record
+            self.transfer_token = RemoteDataFile().create_transfer(self.submission_id)['_id']
 
-            kwargs = dict(target_id=sub_id, commenced_on=str(datetime.now()))
-            Submission().save_record(dict(), **kwargs)
+        # get the next action in the sequence
+        status_indx = [indx for indx, elem in enumerate(self.submission_sequence) if elem == self.status]
+        next_stage_indx = 0
+        if status_indx:
+            next_stage_indx = status_indx[0]
 
-            f_str = ' '.join(file_path)
-            cmd = "./ascp -d -QT -l700M -L- {f_str!s} {user_name!s}:{remote_path!s}".format(**locals())
-            lg.log(cmd, level=Loglvl.INFO, type=Logtype.FILE)
-            os.chdir(path2library)
+        # check for completed stage
+        if self.submission_sequence[next_stage_indx] == "completed":
+            self.context["ena_status"] = "completed"
+        else:
+            self.dispatcher[self.submission_sequence[next_stage_indx]]()
 
-            try:
-                thread = pexpect.spawn(cmd, timeout=None)
-                thread.expect(["assword:", pexpect.EOF])
-                thread.sendline(password)
+        self.update_process_time()
+        return self.context
 
-                cpl = thread.compile_pattern_list([pexpect.EOF, '(.+)'])
-
-                while True:
-                    i = thread.expect_list(cpl, timeout=None)
-                    if i == 0:  # EOF! Possible error point if encountered before transfer completion
-                        print("Process termination - check exit status!")
-                        break
-                    elif i == 1:
-                        pexp_match = thread.match.group(1)
-                        prev_file = ''
-                        tokens_to_match = ["Mb/s", "status=success", "status=started"]
-                        units_to_match = ["KB", "MB", "GB"]
-                        rates_to_match = ["Kb/s", "kb/s", "Mb/s", "mb/s", "Gb/s", "gb/s"]
-                        time_units = ['d', 'h', 'm', 's']
-                        end_of_transfer = False
-
-                        if any(tm in pexp_match.decode("utf-8") for tm in tokens_to_match):
-                            transfer_fields = dict()
-                            tokens = pexp_match.decode("utf-8").split(" ")
-                            lg.log(tokens, level=Loglvl.INFO, type=Logtype.FILE)
-
-                            # has a file transfer started?
-                            if 'status=started' in tokens:
-                                # get the target file and update transfer record
-                                target_file = [tk for tk in tokens if tk[:5] == "file=" or tk[:7] == "source="]
-
-                                for up_f in target_file:
-                                    up_f_1 = up_f.split("=")[1].strip('"')
-
-                                    # update file path and datafile id
-                                    transfer_fields["file_path"] = up_f_1
-
-                                    submission_record = Submission().get_record(sub_id)
-                                    bundle_meta = submission_record.get("bundle_meta", list())
-
-                                    listed_file = [indx for indx, elem in enumerate(bundle_meta) if
-                                                   elem['file_path'] == up_f_1]
-
-                                    if listed_file:
-                                        transfer_fields["datafile_id"] = bundle_meta[listed_file[0]]["file_id"]
-
-                                # get original file size
-                                file_size_bytes = [x for x in tokens if len(x) > 5 and x[:4] == 'size']
-                                if file_size_bytes:
-                                    t = file_size_bytes[0].split("=")[1]
-                                    transfer_fields["file_size_bytes"] = size(int(t), system=alternative)
-
-                            # extract other file transfer metadata
-                            if 'ETA' in tokens:
-                                # get %completed, bytes transferred, current time etc
-                                pct_completed = [x for x in tokens if len(x) > 1 and x[-1] == '%']
-                                if pct_completed:
-                                    transfer_fields["pct_completed"] = pct_completed[0][:-1]
-                                    print(
-                                        str(transfer_token) + ":  " + transfer_fields["pct_completed"] + '% transfered')
-
-                                # bytes transferred
-                                bytes_transferred = [x for x in tokens if len(x) > 2 and x[-2:] in units_to_match]
-                                if bytes_transferred:
-                                    transfer_fields["bytes_transferred"] = bytes_transferred[0]
-
-                                # transfer rate
-                                transfer_rate = [x for x in tokens if len(x) > 4 and x[-4:] in rates_to_match]
-                                if transfer_rate:
-                                    transfer_fields["transfer_rate"] = transfer_rate[0]
-
-                                # current time - this will serve as the last time an activity was recorded
-                                transfer_fields["current_time"] = datetime.now().strftime(
-                                    "%d-%m-%Y %H:%M:%S")
-
-                            # has a file been successfully transferred?
-                            if 'status=success' in tokens:
-                                # get the target file and update its status in the submission record
-                                target_file = [tk for tk in tokens if tk[:5] == "file=" or tk[:7] == "source="]
-
-                                for up_f in target_file:
-                                    up_f_1 = up_f.split("=")[1].strip('"')
-                                    submission_record = Submission().get_record(sub_id)
-
-                                    bundle_meta = submission_record.get("bundle_meta", list())
-                                    listed_file = [indx for indx, elem in enumerate(bundle_meta) if
-                                                   elem['file_path'] == up_f_1]
-                                    if listed_file:
-                                        bundle_meta[listed_file[0]]["upload_status"] = True
-                                        kwargs = dict(target_id=sub_id, bundle_meta=bundle_meta)
-                                        Submission().save_record(dict(), **kwargs)
-
-                                        # is this the final file to be transferred?
-                                        submission_record = Submission().get_record(sub_id)
-                                        if "bundle_meta" in submission_record:
-                                            pending_files = [x["file_id"] for x in submission_record['bundle_meta'] if
-                                                             not x["upload_status"]]
-
-                                            if not pending_files:  # we are all done!
-                                                transfer_fields["transfer_status"] = "completed"
-                                                transfer_fields["pct_completed"] = '100'
-                                                transfer_fields["current_time"] = datetime.now().strftime(
-                                                    "%d-%m-%Y %H:%M:%S")
-
-                            # save collected metadata to the transfer record
-                            RemoteDataFile().update_transfer(transfer_token, transfer_fields)
-
-                # commenting this out since, technically, submission is yet to be completed at this point
-                # kwargs = dict(target_id=sub_id, completed_on=datetime.now())
-                # Submission().save_record(dict(), **kwargs)
-                # close thread
-                thread.close()
-                lg.log('Aspera Transfer completed', level=Loglvl.INFO, type=Logtype.FILE)
-
-            except OSError:
-                transfer_fields = dict()
-                transfer_fields["error"] = "Encountered problems with file upload."
-                transfer_fields["current_time"] = datetime.now().strftime(
-                    "%d-%m-%Y %H:%M:%S")
-
-                # save error to transfer record
-                RemoteDataFile().update_transfer(transfer_token, transfer_fields)
-                return False
-            finally:
-                pass
-
-        else:  # no files to be uploaded
+    def update_process_time(self):
+        rem = RemoteDataFile().get_by_sub_id(self.submission_id)
+        if rem:
             transfer_fields = dict()
-            transfer_fields["transfer_status"] = "completed"
-            transfer_fields["pct_completed"] = '100'
             transfer_fields["current_time"] = datetime.now().strftime(
                 "%d-%m-%Y %H:%M:%S")
 
-            # save collected metadata to the transfer record
-            RemoteDataFile().update_transfer(transfer_token, transfer_fields)
+            # save error to transfer record
+            RemoteDataFile().update_transfer(self.transfer_token, transfer_fields)
 
+    def _get_output_paths(self):
         # setup paths for conversion directories
-        conv_dir = os.path.join(self._dir, sub_id)
+        conv_dir = os.path.join(self._dir, self.submission_id)
         if not os.path.exists(os.path.join(conv_dir, 'json')):
             os.makedirs(os.path.join(conv_dir, 'json'))
         json_file_path = os.path.join(conv_dir, 'json', 'isa_json.json')
-        xml_dir = conv_dir
-        xml_path = os.path.join(xml_dir, 'run_set.xml')
 
-        #  Convert COPO JSON to ISA JSON
+        return dict(json_file_path=json_file_path,
+                    xml_dir=conv_dir,
+                    conv_dir=conv_dir,
+                    remote_path=d_utils.get_ena_remote_path(self.submission_id)
+                    )
+
+    def _do_collate_copo_records(self):
+        """
+        collates relevant copo records to be used in composing submission components
+        :return:
+        """
+
+        lg.log('Collating COPO records', level=Loglvl.INFO, type=Logtype.FILE)
+
+        collated_records = cnv.ISAHelpers().broker_copo_records(submission_token=self.submission_id)
+        submission_record = Submission().get_record(self.submission_id)
+        transcript = submission_record["transcript"]
+        transcript["collated_records"] = json.dumps(collated_records, default=json_util.default)
+
+        kwargs = dict(target_id=self.submission_id, transcript=transcript)
+        Submission().save_record(dict(), **kwargs)
+
+        self.context["ena_status"] = "collated_records"
+
+        return
+
+    def _do_copojson2isajson(self):
+        """
+        converts copo json to isa json
+        :return:
+        """
         lg.log('Obtaining ISA-JSON', level=Loglvl.INFO, type=Logtype.FILE)
-        conv = cnv.Investigation(submission_token=sub_id)
-        meta = conv.get_schema()
-        json_file = open(json_file_path, '+w')
-        # dump metadata to output file
-        json_file.write(dumps(meta))
+        submission_record = Submission().get_record(self.submission_id)
+
+        collated_records = submission_record["transcript"]["collated_records"]
+        collated_records = json.loads(collated_records, object_hook=json_util.object_hook)
+        copo_isa_object = cnv.Investigation(submission_token=self.submission_id)
+        copo_isa_object.set_copo_isa_records(collated_records)
+        generated_json = copo_isa_object.get_schema()
+
+        paths = self._get_output_paths()
+        json_file = open(paths["json_file_path"], '+w')
+
+        # dump generated json to output file
+        json_file.write(dumps(generated_json))
         json_file.close()
 
-        # Validate ISA_JSON
+        self.context["ena_status"] = "generated_isajson"
+
+        return
+
+    def validate_isajson(self):
         lg.log('Validating ISA-JSON', level=Loglvl.INFO, type=Logtype.FILE)
-        with open(json_file_path) as json_file:
+        paths = self._get_output_paths()
+        with open(paths["json_file_path"]) as json_file:
             v = isajson.validate(json_file)
             lg.log(v, level=Loglvl.INFO, type=Logtype.FILE)
 
-        # convert to SRA with isatools converter
+        return
+
+    def _convert_to_sra(self):
+        self.validate_isajson()
+
         lg.log('Converting to SRA', level=Loglvl.INFO, type=Logtype.FILE)
         sra_settings = d_utils.json_to_pytype(SRA_SETTINGS).get("properties", dict())
-        datafilehashes = conv.get_datafilehashes()
-        json2sra.convert(json_fp=open(json_file_path), path=conv_dir, sra_settings=sra_settings,
+        submission_record = Submission().get_record(self.submission_id)
+
+        collated_records = submission_record["transcript"]["collated_records"]
+        collated_records = json.loads(collated_records, object_hook=json_util.object_hook)
+        datafilehashes = collated_records["datafilehashes"]
+
+        paths = self._get_output_paths()
+
+        json2sra.convert(json_fp=open(paths["json_file_path"]), path=paths["conv_dir"], sra_settings=sra_settings,
                          datafilehashes=datafilehashes, validate_first=False)
 
-        # finally submit to SRA
+        self.context["ena_status"] = "converted_to_sra"
+        return
+
+    def _submit_to_sra(self):
         lg.log('Submitting XMLS to ENA via CURL', level=Loglvl.INFO, type=Logtype.FILE)
+        paths = self._get_output_paths()
+        xml_dir = paths["xml_dir"]
+        remote_path = paths["xml_dir"]
+
         submission_file = os.path.join(xml_dir, 'submission.xml')
         project_file = os.path.join(xml_dir, 'project_set.xml')
         sample_file = os.path.join(xml_dir, 'sample_set.xml')
         experiment_file = os.path.join(xml_dir, 'experiment_set.xml')
         run_file = os.path.join(xml_dir, 'run_set.xml')
 
-        # "https://www-test.ebi.ac.uk"
-        # "https://www.ebi.ac.uk"
         pass_word = resolve_env.get_env('WEBIN_USER_PASSWORD')
         user_token = resolve_env.get_env('WEBIN_USER')
         ena_service = resolve_env.get_env('ENA_SERVICE')
@@ -278,10 +200,10 @@ class EnaSubmit(object):
             **locals())
 
         curl_cmd = 'curl -k -F "SUBMISSION=@' + submission_file + '" \
-         -F "PROJECT=@' + os.path.join(remote_path, project_file) + '" \
-         -F "SAMPLE=@' + os.path.join(remote_path, sample_file) + '" \
-         -F "EXPERIMENT=@' + os.path.join(remote_path, experiment_file) + '" \
-         -F "RUN=@' + os.path.join(remote_path, run_file) + '"' \
+                 -F "PROJECT=@' + os.path.join(remote_path, project_file) + '" \
+                 -F "SAMPLE=@' + os.path.join(remote_path, sample_file) + '" \
+                 -F "EXPERIMENT=@' + os.path.join(remote_path, experiment_file) + '" \
+                 -F "RUN=@' + os.path.join(remote_path, run_file) + '"' \
                    + '   "' + ena_uri + '"'
 
         output = subprocess.check_output(curl_cmd, shell=True)
@@ -289,8 +211,6 @@ class EnaSubmit(object):
         lg.log("Extracting fields from receipt", level=Loglvl.INFO, type=Logtype.FILE)
 
         xml = ET.fromstring(output)
-
-        accessions = dict()
 
         # first check for errors
         errors = xml.findall('*/ERROR')
@@ -305,8 +225,19 @@ class EnaSubmit(object):
                 "%d-%m-%Y %H:%M:%S")
 
             # save error to transfer record
-            RemoteDataFile().update_transfer(transfer_token, transfer_fields)
-            return False
+            RemoteDataFile().update_transfer(self.transfer_token, transfer_fields)
+
+            self.context["ena_status"] = "error"
+            self.context["error_text"] = error_text
+
+            return
+
+        return self._do_save_accessions(xml)
+
+    def _do_save_accessions(self, xml):
+        lg.log('Retrieving and saving accessions to database', level=Loglvl.INFO, type=Logtype.FILE)
+
+        accessions = dict()
 
         # get project accessions
         projects = xml.findall('./PROJECT')
@@ -357,14 +288,200 @@ class EnaSubmit(object):
         accessions['sample'] = sample_accessions
 
         # save accessions to mongo record
-        s = Submission().get_record(sub_id)
-        s['accessions'] = accessions
-        s['complete'] = True
-        s['completed_on'] = datetime.now()
-        s['target_id'] = str(s.pop('_id'))
+        submission_record = Submission().get_record(self.submission_id)
+        submission_record['accessions'] = accessions
+        submission_record['complete'] = True
+        submission_record['completed_on'] = datetime.now()
+        submission_record['target_id'] = str(submission_record.pop('_id'))
+        try:
+            del submission_record["transcript"]["collated_records"]
+        except:
+            pass
 
-        Submission().save_record(dict(), **s)
+        Submission().save_record(dict(), **submission_record)
+        RemoteDataFile().delete_transfer(self.transfer_token)
 
-        RemoteDataFile().delete_transfer(transfer_token)
+        self.context["ena_status"] = "completed"
+        return
 
-        return True
+    def _do_aspera_transfer(self, user_name=None, password=None, remote_path=None, file_path=None,
+                            path2library=None):
+
+        lg.log('Starting aspera transfer', level=Loglvl.INFO, type=Logtype.FILE)
+
+        kwargs = dict(target_id=self.submission_id, commenced_on=str(datetime.now()))
+        Submission().save_record(dict(), **kwargs)
+
+        f_str = ' '.join(file_path)
+        cmd = "./ascp -d -QT -l700M -L- {f_str!s} {user_name!s}:{remote_path!s}".format(**locals())
+        lg.log(cmd, level=Loglvl.INFO, type=Logtype.FILE)
+        os.chdir(path2library)
+
+        try:
+            thread = pexpect.spawn(cmd, timeout=None)
+            thread.expect(["assword:", pexpect.EOF])
+            thread.sendline(password)
+
+            cpl = thread.compile_pattern_list([pexpect.EOF, '(.+)'])
+
+            while True:
+                i = thread.expect_list(cpl, timeout=None)
+                if i == 0:  # EOF! Possible error point if encountered before transfer completion
+                    print("Process termination - check exit status!")
+                    break
+                elif i == 1:
+                    pexp_match = thread.match.group(1)
+                    prev_file = ''
+                    tokens_to_match = ["Mb/s", "status=success", "status=started"]
+                    units_to_match = ["KB", "MB", "GB"]
+                    rates_to_match = ["Kb/s", "kb/s", "Mb/s", "mb/s", "Gb/s", "gb/s"]
+                    time_units = ['d', 'h', 'm', 's']
+                    end_of_transfer = False
+
+                    if any(tm in pexp_match.decode("utf-8") for tm in tokens_to_match):
+                        transfer_fields = dict()
+                        tokens = pexp_match.decode("utf-8").split(" ")
+                        lg.log(tokens, level=Loglvl.INFO, type=Logtype.FILE)
+
+                        # has a file transfer started?
+                        if 'status=started' in tokens:
+                            # get the target file and update transfer record
+                            target_file = [tk for tk in tokens if tk[:5] == "file=" or tk[:7] == "source="]
+
+                            for up_f in target_file:
+                                up_f_1 = up_f.split("=")[1].strip('"')
+
+                                # update file path and datafile id
+                                transfer_fields["file_path"] = up_f_1
+
+                                submission_record = Submission().get_record(self.submission_id)
+                                bundle_meta = submission_record.get("bundle_meta", list())
+
+                                listed_file = [indx for indx, elem in enumerate(bundle_meta) if
+                                               elem['file_path'] == up_f_1]
+
+                                if listed_file:
+                                    transfer_fields["datafile_id"] = bundle_meta[listed_file[0]]["file_id"]
+
+                            # get original file size
+                            file_size_bytes = [x for x in tokens if len(x) > 5 and x[:4] == 'size']
+                            if file_size_bytes:
+                                t = file_size_bytes[0].split("=")[1]
+                                transfer_fields["file_size_bytes"] = size(int(t), system=alternative)
+
+                        # extract other file transfer metadata
+                        if 'ETA' in tokens:
+                            # get %completed, bytes transferred, current time etc
+                            pct_completed = [x for x in tokens if len(x) > 1 and x[-1] == '%']
+                            if pct_completed:
+                                transfer_fields["pct_completed"] = pct_completed[0][:-1]
+                                print(
+                                    str(self.transfer_token) + ":  " + transfer_fields[
+                                        "pct_completed"] + '% transfered')
+
+                            # bytes transferred
+                            bytes_transferred = [x for x in tokens if len(x) > 2 and x[-2:] in units_to_match]
+                            if bytes_transferred:
+                                transfer_fields["bytes_transferred"] = bytes_transferred[0]
+
+                            # transfer rate
+                            transfer_rate = [x for x in tokens if len(x) > 4 and x[-4:] in rates_to_match]
+                            if transfer_rate:
+                                transfer_fields["transfer_rate"] = transfer_rate[0]
+
+                            # current time - this will serve as the last time an activity was recorded
+                            transfer_fields["current_time"] = datetime.now().strftime(
+                                "%d-%m-%Y %H:%M:%S")
+
+                        # has a file been successfully transferred?
+                        if 'status=success' in tokens:
+                            # get the target file and update its status in the submission record
+                            target_file = [tk for tk in tokens if tk[:5] == "file=" or tk[:7] == "source="]
+
+                            for up_f in target_file:
+                                up_f_1 = up_f.split("=")[1].strip('"')
+                                submission_record = Submission().get_record(self.submission_id)
+
+                                bundle_meta = submission_record.get("bundle_meta", list())
+                                listed_file = [indx for indx, elem in enumerate(bundle_meta) if
+                                               elem['file_path'] == up_f_1]
+                                if listed_file:
+                                    bundle_meta[listed_file[0]]["upload_status"] = True
+                                    kwargs = dict(target_id=self.submission_id, bundle_meta=bundle_meta)
+                                    Submission().save_record(dict(), **kwargs)
+
+                                    # is this the final file to be transferred?
+                                    submission_record = Submission().get_record(self.submission_id)
+                                    if "bundle_meta" in submission_record:
+                                        pending_files = [x["file_id"] for x in submission_record['bundle_meta'] if
+                                                         not x["upload_status"]]
+
+                                        if not pending_files:  # we are all done!
+                                            transfer_fields["transfer_status"] = "completed"
+                                            transfer_fields["pct_completed"] = '100'
+                                            transfer_fields["current_time"] = datetime.now().strftime(
+                                                "%d-%m-%Y %H:%M:%S")
+
+                        # save collected metadata to the transfer record
+                        RemoteDataFile().update_transfer(self.transfer_token, transfer_fields)
+
+            thread.close()
+            lg.log('Aspera Transfer completed', level=Loglvl.INFO, type=Logtype.FILE)
+
+        except OSError:
+            transfer_fields = dict()
+            transfer_fields["error"] = "Encountered problems with file upload."
+            transfer_fields["current_time"] = datetime.now().strftime(
+                "%d-%m-%Y %H:%M:%S")
+
+            # save error to transfer record
+            RemoteDataFile().update_transfer(self.transfer_token, transfer_fields)
+            return False
+        finally:
+            pass
+
+        self.context["ena_status"] = "files_transferred"
+        return
+
+    def _do_file_transfer(self):
+        submission_record = Submission().get_record(self.submission_id)
+
+        # what datafiles need to be uploaded?
+        pending_files = list()
+        if "bundle_meta" in submission_record:
+            pending_files = [x["file_id"] for x in submission_record['bundle_meta'] if not x["upload_status"]]
+
+        if pending_files:
+            # there are files to be transferred
+            path2library = os.path.join(BASE_DIR, REPOSITORIES['ASPERA']['resource_path'])
+
+            user_name = REPOSITORIES['ASPERA']['user_token']
+            password = REPOSITORIES['ASPERA']['password']
+
+            remote_path = d_utils.get_ena_remote_path(self.submission_id)
+
+            # get each file in the bundle
+            file_path = []
+            for idx, f_id in enumerate(pending_files):
+                mongo_file = DataFile().get_record(f_id)
+                self.d_files.append(mongo_file)
+                file_path.append(mongo_file.get("file_location", str()))
+
+            self._do_aspera_transfer(user_name=user_name,
+                                     password=password,
+                                     remote_path=remote_path,
+                                     file_path=file_path,
+                                     path2library=path2library)
+        else:
+            # no files to be uploaded
+            transfer_fields = dict()
+            transfer_fields["transfer_status"] = "completed"
+            transfer_fields["pct_completed"] = '100'
+            transfer_fields["current_time"] = datetime.now().strftime(
+                "%d-%m-%Y %H:%M:%S")
+
+            # save collected metadata to the transfer record
+            RemoteDataFile().update_transfer(self.transfer_token, transfer_fields)
+
+            self.context["ena_status"] = "files_transferred"
+        return

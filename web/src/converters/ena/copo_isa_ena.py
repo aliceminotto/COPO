@@ -3,8 +3,8 @@ __author__ = 'etuka'
 import re
 import os
 import copy
-import pandas as pd
 import threading
+import pandas as pd
 from bson import ObjectId
 from dal import cursor_to_list
 import web.apps.web_copo.lookup.lookup as lookup
@@ -16,9 +16,11 @@ from dal.copo_da import Submission, DataFile, DAComponent, Person, Sample
 class Investigation:
     def __init__(self, submission_token=str()):
         self.submission_token = submission_token
-        print("Retrieving relevant profile records...")
-        self.copo_isa_records = ISAHelpers().broker_copo_records(submission_token)
-        print("Retrieved profile records.")
+        self.copo_isa_records = dict()
+        self.profile_id = str()
+
+    def set_copo_isa_records(self, copo_isa_records):
+        self.copo_isa_records = copo_isa_records
         self.profile_id = str(self.copo_isa_records.get("profile").get("_id"))
 
     def get_schema(self):
@@ -558,22 +560,25 @@ class Assay:
     def _processSequence(self, spec=dict()):
         print("Composing assay process sequence...")
 
-        # get datafiles
-        indx = 0  # process sequence index
-        datafiles_list = list(self.copo_isa_records["datafiles_ids"])
-
         # get relevant protocols
         protocol_list_temp = list(self.copo_isa_records["protocol_list"])
         protocol_list_temp[:] = [d for d in protocol_list_temp if d.get('name') not in ["sample collection"]]
 
-        dfile_list = [[str(x["_id"]),
-                       x.get("description", dict()).get("attributes", dict()).get('datafiles_pairing', dict()).get(
-                           'paired_file', str())] for x
-                      in self.copo_isa_records["datafile"]]
+        # get datafiles
+        dfile_list = list()
+        seen_list = list()
 
-        dfile_list = [sorted(x) for x in dfile_list]
-        dfile_set = set(tuple(x) for x in dfile_list)
-        dfile_list = [list(x) for x in dfile_set]  # get unique pairs
+        # sort files into pairs
+        for df in self.copo_isa_records["datafile"]:
+            if str(df["_id"]) not in seen_list:
+                df_pair = df.get("description", dict()).get("attributes", dict()).get('datafiles_pairing', dict()).get(
+                    'paired_file', str())
+                if df_pair:
+                    seen_list.append(df_pair)
+                    df_pair = [x for x in self.copo_isa_records["datafile"] if str(x["_id"]) == df_pair]
+                    df_pair = df_pair[0] if df_pair else ''
+
+                dfile_list.append([df, df_pair])
 
         for indx, dfile in enumerate(dfile_list):
             self.get_assay_process_sequence(dfile, protocol_list_temp, indx)
@@ -582,7 +587,7 @@ class Assay:
         return self.process_sequence
 
     def get_assay_process_sequence(self, datafile_pair, protocol_list_temp, indx):
-        datafile = DataFile().get_record(datafile_pair[0])
+        datafile = datafile_pair[0]
 
         # modify to reflect actual saved name, in case of any obfuscation of the file name
         datafile["name"] = os.path.split(datafile["file_location"])[-1]
@@ -635,7 +640,7 @@ class Assay:
 
                 # is this a paired read?
                 if datafile_pair[1]:
-                    paired_datafile = DataFile().get_record(datafile_pair[1])
+                    paired_datafile = datafile_pair[1]
                     paired_datafile["name"] = os.path.split(paired_datafile["file_location"])[-1]
                     outputs.append({"@id": ISAHelpers().get_id_field("datafile", paired_datafile)})
 
@@ -790,11 +795,15 @@ class ISAHelpers:
 
         # datafile and samples, sources, study_type and seq_instruments
         df_ids_list = DAComponent(component="submission").get_record(submission_token).get("bundle", list())
-        copo_records["datafiles_ids"] = df_ids_list
 
         df_ids_object_list = [ObjectId(element) for element in df_ids_list]
         datafiles = cursor_to_list(
-            DataFile().get_collection_handle().find({"_id": {"$in": df_ids_object_list}}))
+            DataFile().get_collection_handle().find({"_id": {"$in": df_ids_object_list}},
+                                                    {"file_location": 1,
+                                                     "description.attributes": 1,
+                                                     "name": 1,
+                                                     "type": 1,
+                                                     "file_hash": 1}))
         copo_records["datafile"] = list(datafiles)
 
         copo_records["datafilehashes"] = self.get_datafilehashes(datafiles,
