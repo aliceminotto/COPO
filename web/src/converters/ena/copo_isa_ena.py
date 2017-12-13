@@ -568,7 +568,7 @@ class Assay:
         dfile_list = list()
         seen_list = list()
 
-        # sort files into pairs
+        # sort files into pairs - we might as well do it here, since we are always going to do the check later
         for df in self.copo_isa_records["datafile"]:
             if str(df["_id"]) not in seen_list:
                 df_pair = df.get("description", dict()).get("attributes", dict()).get('datafiles_pairing', dict()).get(

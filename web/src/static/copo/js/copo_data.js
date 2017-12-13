@@ -1970,6 +1970,7 @@ $(document).ready(function () {
 
         if (task == "describe") {
             //append to batch
+
             var batchTargets = [];
             for (var i = 0; i < records.length; ++i) {
                 var item = records[i];
@@ -1980,8 +1981,34 @@ $(document).ready(function () {
                 batchTargets.push(option);
             }
 
-            add_to_batch(batchTargets, false);
-            table.rows().deselect();
+            if (descriptionBundle.length > 0) {
+                BootstrapDialog.show({
+                    title: "Add to description bundle",
+                    message: '<div class=modal-content-div">You already have an active description! <br/>You can add new files to an active description; the new files will be validated first against files in the description bundle. <br/><br/>If, however, you want to start a new description, you must first exit the current description.</div>',
+                    cssClass: 'copo-modal2',
+                    closable: false,
+                    animate: true,
+                    type: BootstrapDialog.TYPE_WARNING,
+                    buttons: [{
+                        label: 'Cancel',
+                        cssClass: 'tiny ui basic button',
+                        action: function (dialogRef) {
+                            dialogRef.close();
+                        }
+                    }, {
+                        label: 'Add to bundle',
+                        cssClass: 'tiny ui basic orange button',
+                        action: function (dialogRef) {
+                            dialogRef.close();
+                            add_to_batch(batchTargets, false);
+                            table.rows().deselect();
+                        }
+                    }]
+                });
+            } else {
+                add_to_batch(batchTargets, false);
+                table.rows().deselect();
+            }
 
         } else if (task == "discard") {
             do_undescribe_confirmation(records, describedRecords);

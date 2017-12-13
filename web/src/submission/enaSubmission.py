@@ -41,7 +41,7 @@ class EnaSubmit(object):
         self.submission_id = submission_id
         self.transfer_token = str()
         self.context = dict()
-        self.status = status  # status or the stage the submission has reached
+        self.status = status  # status or the execution stage the submission has reached
         self.dispatcher = {
             'commenced': self._do_file_transfer,
             'files_transferred': self._do_collate_copo_records,
