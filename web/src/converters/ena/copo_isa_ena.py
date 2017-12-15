@@ -14,18 +14,13 @@ from dal.copo_da import Submission, DataFile, DAComponent, Person, Sample
 
 
 class Investigation:
-    def __init__(self, submission_token=str()):
-        self.submission_token = submission_token
-        self.copo_isa_records = dict()
-        self.profile_id = str()
-
-    def set_copo_isa_records(self, copo_isa_records):
+    def __init__(self, copo_isa_records=dict(), study_schema=dict()):
         self.copo_isa_records = copo_isa_records
+        self.study_schema = study_schema
         self.profile_id = str(self.copo_isa_records.get("profile").get("_id"))
 
     def get_schema(self):
         component = "investigation"
-        print("Composing investigation schema...")
 
         properties = d_utils.get_db_json_schema(component)
 
@@ -56,7 +51,7 @@ class Investigation:
         return self.copo_isa_records.get("submission_token")
 
     def _studies(self, spec=dict()):
-        return Study(copo_isa_records=self.copo_isa_records).get_schema()
+        return self.study_schema
 
     def _ontologySourceReferences(self, spec=dict()):
         osr = list()
@@ -110,13 +105,13 @@ class Investigation:
 
 
 class Study:
-    def __init__(self, copo_isa_records=str()):
+    def __init__(self, copo_isa_records=str(), assay_schema=dict()):
         self.copo_isa_records = copo_isa_records
+        self.assay_schema = assay_schema
         self.profile_id = str(self.copo_isa_records.get("profile").get("_id"))
 
     def get_schema(self):
         component = "study"
-        print("Composing study schema...")
 
         schemas = list()
         properties = d_utils.get_db_json_schema(component)
@@ -137,7 +132,7 @@ class Study:
         return schemas
 
     def _assays(self, spec):
-        return Assay(copo_isa_records=self.copo_isa_records).get_schema()
+        return self.assay_schema
 
     def _publications(self, spec=dict()):
         component = "publication"
@@ -471,7 +466,6 @@ class Assay:
 
     def get_schema(self):
         component = "assay"
-        print("Composing assay schema...")
 
         schemas = list()
         properties = d_utils.get_db_json_schema(component)
@@ -558,7 +552,6 @@ class Assay:
         return unitCategories
 
     def _processSequence(self, spec=dict()):
-        print("Composing assay process sequence...")
 
         # get relevant protocols
         protocol_list_temp = list(self.copo_isa_records["protocol_list"])
@@ -583,7 +576,6 @@ class Assay:
         for indx, dfile in enumerate(dfile_list):
             self.get_assay_process_sequence(dfile, protocol_list_temp, indx)
 
-        print("Completed composing assay process sequence...")
         return self.process_sequence
 
     def get_assay_process_sequence(self, datafile_pair, protocol_list_temp, indx):

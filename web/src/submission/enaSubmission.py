@@ -45,12 +45,20 @@ class EnaSubmit(object):
         self.dispatcher = {
             'commenced': self._do_file_transfer,
             'files_transferred': self._do_collate_copo_records,
-            'collated_records': self._do_copojson2isajson,
+            'collated_records': self._get_assay_schema,
+            'generated_assay_schema': self._get_study_schema,
+            'generated_study_schema': self._do_copojson2isajson,
             'generated_isajson': self._convert_to_sra,
             'converted_to_sra': self._submit_to_sra
         }
-        self.submission_sequence = ["commenced", "files_transferred", "collated_records", "generated_isajson",
-                                    "converted_to_sra", "completed"]
+        self.submission_sequence = ["commenced",
+                                    "files_transferred",
+                                    "collated_records",
+                                    "generated_assay_schema",
+                                    "generated_study_schema",
+                                    "generated_isajson",
+                                    "converted_to_sra",
+                                    "completed"]
 
     def submit(self):
         # check submission status
@@ -100,8 +108,12 @@ class EnaSubmit(object):
         if not os.path.exists(os.path.join(conv_dir, 'json')):
             os.makedirs(os.path.join(conv_dir, 'json'))
         json_file_path = os.path.join(conv_dir, 'json', 'isa_json.json')
+        assay_file_path = os.path.join(conv_dir, 'json', 'assay.json')
+        study_file_path = os.path.join(conv_dir, 'json', 'study.json')
 
         return dict(json_file_path=json_file_path,
+                    assay_file_path=assay_file_path,
+                    study_file_path=study_file_path,
                     xml_dir=conv_dir,
                     conv_dir=conv_dir,
                     remote_path=d_utils.get_ena_remote_path(self.submission_id)
@@ -127,6 +139,47 @@ class EnaSubmit(object):
 
         return
 
+    def _get_assay_schema(self):
+        lg.log('Composing Assay schema', level=Loglvl.INFO, type=Logtype.FILE)
+
+        submission_record = Submission().get_record(self.submission_id)
+
+        collated_records = submission_record["transcript"]["collated_records"]
+        collated_records = json.loads(collated_records, object_hook=json_util.object_hook)
+
+        assay_schema = cnv.Assay(copo_isa_records=collated_records).get_schema()
+        assay_file = open(self._get_output_paths()["assay_file_path"], '+w')
+
+        # dump generated json to output file
+        assay_file.write(dumps(assay_schema))
+        assay_file.close()
+
+        self.context["ena_status"] = "generated_assay_schema"
+
+        return
+
+    def _get_study_schema(self):
+        lg.log('Composing Study schema', level=Loglvl.INFO, type=Logtype.FILE)
+
+        submission_record = Submission().get_record(self.submission_id)
+
+        collated_records = submission_record["transcript"]["collated_records"]
+        collated_records = json.loads(collated_records, object_hook=json_util.object_hook)
+
+        # retrieve stored assay schema and pass along
+        assay_schema = d_utils.json_to_pytype(self._get_output_paths()["assay_file_path"])
+
+        study_schema = cnv.Study(copo_isa_records=collated_records, assay_schema=assay_schema).get_schema()
+        study_file = open(self._get_output_paths()["study_file_path"], '+w')
+
+        # dump generated json to output file
+        study_file.write(dumps(study_schema))
+        study_file.close()
+
+        self.context["ena_status"] = "generated_study_schema"
+
+        return
+
     def _do_copojson2isajson(self):
         """
         converts copo json to isa json
@@ -137,12 +190,14 @@ class EnaSubmit(object):
 
         collated_records = submission_record["transcript"]["collated_records"]
         collated_records = json.loads(collated_records, object_hook=json_util.object_hook)
-        copo_isa_object = cnv.Investigation(submission_token=self.submission_id)
-        copo_isa_object.set_copo_isa_records(collated_records)
+
+        # retrieve stored study schema and pass along
+        study_schema = d_utils.json_to_pytype(self._get_output_paths()["study_file_path"])
+
+        copo_isa_object = cnv.Investigation(copo_isa_records=collated_records, study_schema=study_schema)
         generated_json = copo_isa_object.get_schema()
 
-        paths = self._get_output_paths()
-        json_file = open(paths["json_file_path"], '+w')
+        json_file = open(self._get_output_paths()["json_file_path"], '+w')
 
         # dump generated json to output file
         json_file.write(dumps(generated_json))
