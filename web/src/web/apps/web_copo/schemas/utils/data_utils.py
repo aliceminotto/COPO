@@ -8,9 +8,9 @@ from datetime import datetime
 from bson.json_util import dumps
 from collections import namedtuple
 import xml.etree.ElementTree as ET
+from django.contrib.auth.models import User
 from django_tools.middlewares import ThreadLocal
 
-from tools import resolve_env
 from api.copo_id import get_uid
 import web.apps.web_copo.lookup.lookup as lookup
 from web.apps.web_copo.lookup.resolver import RESOLVER
@@ -411,17 +411,19 @@ def get_ena_remote_path(submission_token):
     :param submission_token: the submission id
     :return:
     """
-    remote_path = os.path.join(submission_token, str(ThreadLocal.get_current_user()))
+
+    assigned_user = str(ThreadLocal.get_current_user())
+
+    from dal.copo_da import Submission
+
+    submission_record = Submission().get_record(submission_token)
+    user_id = submission_record.get("user_id", None)
+    if user_id:
+        user = User.objects.get(pk=int(user_id))
+        assigned_user = user.username
+
+    remote_path = os.path.join(submission_token, assigned_user)
     return remote_path
-
-
-def get_ena_submission_url(user_name, password):
-    """
-    function builds the submission url to point to the specified (test or live box) ENA service
-    :param user_name:
-    :param password:
-    :return:
-    """
 
 
 def get_copo_schema(component, as_object=False):

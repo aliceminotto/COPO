@@ -37,9 +37,6 @@ class Investigation:
 
         return properties
 
-    def get_datafilehashes(self):
-        return self.copo_isa_records["datafilehashes"]
-
     def _title(self, spec=dict()):
         return ISAHelpers().get_schema_key_type(spec)
 
@@ -798,9 +795,6 @@ class ISAHelpers:
                                                      "file_hash": 1}))
         copo_records["datafile"] = list(datafiles)
 
-        copo_records["datafilehashes"] = self.get_datafilehashes(datafiles,
-                                                                 submission_token)
-
         # sample... contingent on datafiles
         attach_samples = [
             x.get("description", dict()).get("attributes", dict()).get('attach_samples', dict()).get('study_samples',
@@ -876,7 +870,7 @@ class ISAHelpers:
 
         return copo_records
 
-    def get_datafilehashes(self, datafiles, submission_token):
+    def get_datafilehashes(self, datafiles=list(), submission_token=str()):
         datafilehashes = dict()
 
         df = pd.DataFrame(datafiles)

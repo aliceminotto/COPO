@@ -136,18 +136,20 @@ class EnaSubmit(object):
         Submission().save_record(dict(), **kwargs)
 
         self.context["ena_status"] = "collated_records"
-
         return
 
-    def _get_assay_schema(self):
-        lg.log('Composing Assay schema', level=Loglvl.INFO, type=Logtype.FILE)
-
+    def _get_collated_records(self):
         submission_record = Submission().get_record(self.submission_id)
 
         collated_records = submission_record["transcript"]["collated_records"]
         collated_records = json.loads(collated_records, object_hook=json_util.object_hook)
 
-        assay_schema = cnv.Assay(copo_isa_records=collated_records).get_schema()
+        return collated_records
+
+    def _get_assay_schema(self):
+        lg.log('Composing Assay schema', level=Loglvl.INFO, type=Logtype.FILE)
+
+        assay_schema = cnv.Assay(copo_isa_records=self._get_collated_records()).get_schema()
         assay_file = open(self._get_output_paths()["assay_file_path"], '+w')
 
         # dump generated json to output file
@@ -161,15 +163,10 @@ class EnaSubmit(object):
     def _get_study_schema(self):
         lg.log('Composing Study schema', level=Loglvl.INFO, type=Logtype.FILE)
 
-        submission_record = Submission().get_record(self.submission_id)
-
-        collated_records = submission_record["transcript"]["collated_records"]
-        collated_records = json.loads(collated_records, object_hook=json_util.object_hook)
-
         # retrieve stored assay schema and pass along
         assay_schema = d_utils.json_to_pytype(self._get_output_paths()["assay_file_path"])
 
-        study_schema = cnv.Study(copo_isa_records=collated_records, assay_schema=assay_schema).get_schema()
+        study_schema = cnv.Study(copo_isa_records=self._get_collated_records(), assay_schema=assay_schema).get_schema()
         study_file = open(self._get_output_paths()["study_file_path"], '+w')
 
         # dump generated json to output file
@@ -186,17 +183,12 @@ class EnaSubmit(object):
         :return:
         """
         lg.log('Obtaining ISA-JSON', level=Loglvl.INFO, type=Logtype.FILE)
-        submission_record = Submission().get_record(self.submission_id)
-
-        collated_records = submission_record["transcript"]["collated_records"]
-        collated_records = json.loads(collated_records, object_hook=json_util.object_hook)
 
         # retrieve stored study schema and pass along
         study_schema = d_utils.json_to_pytype(self._get_output_paths()["study_file_path"])
 
-        copo_isa_object = cnv.Investigation(copo_isa_records=collated_records, study_schema=study_schema)
-        generated_json = copo_isa_object.get_schema()
-
+        generated_json = cnv.Investigation(copo_isa_records=self._get_collated_records(),
+                                           study_schema=study_schema).get_schema()
         json_file = open(self._get_output_paths()["json_file_path"], '+w')
 
         # dump generated json to output file
@@ -225,7 +217,9 @@ class EnaSubmit(object):
 
         collated_records = submission_record["transcript"]["collated_records"]
         collated_records = json.loads(collated_records, object_hook=json_util.object_hook)
-        datafilehashes = collated_records["datafilehashes"]
+
+        datafilehashes = cnv.ISAHelpers().get_datafilehashes(datafiles=collated_records["datafile"],
+                                                             submission_token=self.submission_id)
 
         paths = self._get_output_paths()
 
