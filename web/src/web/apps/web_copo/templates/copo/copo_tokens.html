@@ -1,4 +1,4 @@
-{% extends 'copo/base.html' %}
+{% extends 'copo/base_2col.html' %}
 
 {% load staticfiles %}
 {% load web_tags %}
@@ -50,6 +50,21 @@
 
 {% block content %}
 
+
+
+    <div class="div_box">
+        <h2>Login to Services</h2>
+        <p>
+            Log into external services here is enable their functionality
+        </p>
+        <p>
+            <img src="{% static "copo/img/cyverse.png" %}"/>
+            <button class="btn btn-default">Log into CyVerse</button>
+        </p>
+
+
+    </div>
+
     <div class="div_box">
         <h2>View / Edit Tokens</h2>
         <p>
@@ -60,7 +75,6 @@
         </p>
 
 
-        
         <div id="figshare_div" style="">
 
         </div>
