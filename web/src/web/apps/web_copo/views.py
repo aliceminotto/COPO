@@ -360,6 +360,9 @@ def load_cyverse_files(request, url, token):
         fnames.append({'text': el['label']})
     return copo_data(request, request.session['profile_id'], json.dumps(fnames))
 
+def agave_delete_token(request):
+    OAuthToken().cyverse_delete_token(request.user.id)
+    return render(request, 'copo/copo_tokens.html', {})
 
 def agave_oauth(request):
     # check for token
@@ -367,8 +370,7 @@ def agave_oauth(request):
     if token:
         # get token and pass
         OAuthToken().check_token(token)
-        url = request.path
-        return load_cyverse_files(request, url, token)
+        return render(request, 'copo/copo_tokens.html', {})
     else:
 
         service = OAuth2Service(
@@ -377,7 +379,8 @@ def agave_oauth(request):
             client_secret='gAnX96MinyBfZ_gsvkr0nEDLpR8a',
             access_token_url='https://agave.iplantc.org/oauth2/token',
             authorize_url='https://agave.iplantc.org/oauth2/authorize',
-            base_url='https://agave.iplantc.org/oauth2/')
+            base_url='https://agave.iplantc.org/oauth2/'
+        )
 
         # the return URL is used to validate the request
         params = {'redirect_uri': 'http://127.0.0.1:8000/copo/agave_oauth',
@@ -411,7 +414,8 @@ def agave_oauth(request):
                 # save token
                 t = json.loads(r.content.decode('utf-8'))
                 OAuthToken().cyverse_save_token(request.user.id, t)
-                return redirect(request.session['datafile_url'])
+                request.session['cyverse_token'] = j.dumps(token)
+                return render(request, 'copo/copo_tokens.html', {})
 
 
 def import_ena_accession(request):
@@ -427,10 +431,12 @@ def import_ena_accession(request):
             output.append(eimp.do_import_ena_accession(acc))
         return HttpResponse(output)
 
+
 @login_required()
 def view_groups(request):
-    #g = Group().create_group(description="test descrition")
+    # g = Group().create_group(description="test descrition")
     profile_list = cursor_to_list(Profile().get_for_user())
     group_list = cursor_to_list(Group().get_by_owner(request.user.id))
     print(group_list)
-    return render(request, 'copo/copo_group.html', {'request': request, 'profile_list': profile_list, 'group_list': group_list})
+    return render(request, 'copo/copo_group.html',
+                  {'request': request, 'profile_list': profile_list, 'group_list': group_list})

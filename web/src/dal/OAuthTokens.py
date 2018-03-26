@@ -27,6 +27,9 @@ class OAuthToken:
         else:
             return False
 
+    def cyverse_delete_token(self, user):
+        return self.OAuthToken.delete_many({"user": user})
+
     def cyverse_save_token(self, user, token):
         return self.OAuthToken.insert(
             {'service': 'cyverse', 'user': user, 'token': token, 'issued': datetime.datetime.now()})

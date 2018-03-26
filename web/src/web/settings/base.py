@@ -131,8 +131,8 @@ TEMPLATES = [
                 # processor for base page status template tags
                 "web.apps.web_copo.context_processors.get_status",
                 "web.apps.web_copo.context_processors.add_partial_submissions_to_context",
-
-                'django.contrib.auth.context_processors.auth',
+                "web.apps.web_copo.context_processors.check_cyverse_token",
+                "django.contrib.auth.context_processors.auth",
             ],
             'debug': True,
         },

@@ -55,11 +55,16 @@
     <div class="div_box">
         <h2>Login to Services</h2>
         <p>
-            Log into external services here is enable their functionality
+            Log into and edit tokens here.
         </p>
         <p>
-            <img src="{% static "copo/img/cyverse.png" %}"/>
-            <button class="btn btn-default">Log into CyVerse</button>
+            {% if cyverse_token %}
+                <img src="{% static "copo/img/cyverse.png" %}"/>
+                <a class="btn btn-default" href="{% url 'copo:agave_delete_token' %}">Delete Cyverse Token</a>
+            {% else %}
+                <img src="{% static "copo/img/cyverse.png" %}"/>
+                <a target="_blank" class="btn btn-default" href="{% url 'copo:agave_oauth' %}">Log into CyVerse</a>
+            {% endif %}
         </p>
 
 
