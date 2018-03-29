@@ -123,6 +123,9 @@ $(document).ready(function () {
     });
 
 
+    $(document).on('click', '#cyverse_tab', make_cyverse_file_tree);
+
+
     //******************************* wizard events *******************************//
 
     //description tab loading event
@@ -4062,6 +4065,30 @@ $(document).ready(function () {
                 }
             ]
         });
+    }
+
+
+    function make_cyverse_file_tree(e) {
+        $.ajax(
+            {
+                url: "/rest/get_cyverse_file_tree/",
+                method: 'GET',
+                dataType: 'json'
+            }
+        ).done(function (data) {
+
+            $('#cyverse_tree').treeview({
+                'data': data,
+                'onNodeSelected': function(event, data){
+                    console.log(data)
+                    $m.nodeSelected(event,data);
+                }
+
+            });
+
+        }).fail(function (data) {
+            console.log("failed: " + data)
+        })
     }
 
 }) //end document ready

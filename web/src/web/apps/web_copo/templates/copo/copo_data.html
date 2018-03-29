@@ -72,6 +72,17 @@
                 </span>
                     </a>
                 </li>
+                {% if cyverse_token %}
+                    <li id="cyverse_tab">
+                        <a data-toggle="tab" href="#cyverseComponent"
+                           data-component="cyverseComponent">
+                <span class="copo-data-panel-title">
+                    <i class="fa fa-cloud"></i>
+                    <span class="icon_text" data-copo-tour-id="copo_data_upload_tab">Cyverse</span>
+                </span>
+                        </a>
+                    </li>
+                {% endif %}
                 <li class="active"><a data-toggle="tab" href="#fileListComponent" data-component="fileListComponent">
             <span class="copo-data-panel-title">
                 <i class="fa fa-file"></i>
@@ -100,16 +111,15 @@
                             <span data-copo-tour-id="copo_data_upload_file_button" id="upload_files_button"
                                   class="tiny ui basic teal button fileinput-button"
                                   style="background-image: none; border-color:transparent;">
-            <span>Select files...</span>
-            <input type="file" name="file"
-                   onchange="get_chunk_size(event)" multiple/>
-            <input type="hidden" name="upload_id" value=""/>
-            <input type="hidden" name="panel_ordering"
-                   value="0"/>
-            <input type="hidden" name="exp_id" value=""/>
-        </span>
+                                    <span>Select files...</span>
+                                    <input type="file" name="file"
+                                           onchange="get_chunk_size(event)" multiple/>
+                                    <input type="hidden" name="upload_id" value=""/>
+                                    <input type="hidden" name="panel_ordering"
+                                           value="0"/>
+                                    <input type="hidden" name="exp_id" value=""/>
+                                </span>
                         </form>
-
 
 
                         <div id="file_tree" style="visibility:hidden"></div>
@@ -117,6 +127,14 @@
                         <div class="file_status_label" style="margin-top: 8px;"></div>
                     </div>
                 </div>
+                {% if cyverse_token %}
+                    <div id="cyverseComponent" class="tab-pane fade in">
+
+                        <div id="cyverse_tree">
+                            <!-- cyverse table data inserted here via js -->
+                        </div>
+                    </div>
+                {% endif %}
                 <div id="fileListComponent" class="tab-pane fade in active">
                     <div style="margin-top: 15px;">
                         <!-- getting started section -->

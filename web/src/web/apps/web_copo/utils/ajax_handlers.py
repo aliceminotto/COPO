@@ -21,6 +21,7 @@ from pandas import read_excel
 from submission.dataverseSubmission import DataverseSubmit
 from django.contrib.auth.models import User
 from django.db.models import Q
+from dal.OAuthTokens import OAuthToken
 
 
 def get_source_count(self):
@@ -296,3 +297,17 @@ def remove_user_from_group(request):
     user_id = request.GET['user_id']
     grp_info = Group().remove_user_from_group(group_id=group_id, user_id=user_id)
     return HttpResponse(json_util.dumps({'resp': grp_info}))
+
+def get_cyverse_file_tree(request):
+    user = request.user
+    # get cyverse token
+    token = json.loads(request.session['cyverse_token'])
+    # call agave api to get file list
+    url_filesystem = 'https://agave.iplantc.org/terrain/v2/secured/filesystem/directory?path=/iplant/home/shared'
+    resp = OAuthToken().call_agave(url_filesystem)
+    fnames = list()
+    for el in resp['folders']:
+        fnames.append({'text': el['label']})
+
+    return HttpResponse(json.dumps(fnames))
+

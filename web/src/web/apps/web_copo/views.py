@@ -349,17 +349,6 @@ def annotate_data(request):
     return HttpResponse(j.dumps(doc))
 
 
-def load_cyverse_files(request, url, token):
-    # get file data and pass to copo_data view
-    url_filesystem = 'https://agave.iplantc.org/terrain/v2/secured/filesystem/directory?path=/iplant/home/shared'
-    headers = {"Authorization": "Bearer " + token['token']['access_token']}
-    cvd = requests.get(url_filesystem, headers=headers)
-    cyverse_data = json.loads(cvd.content.decode('utf-8'))
-    fnames = list()
-    for el in cyverse_data['folders']:
-        fnames.append({'text': el['label']})
-    return copo_data(request, request.session['profile_id'], json.dumps(fnames))
-
 def agave_delete_token(request):
     OAuthToken().cyverse_delete_token(request.user.id)
     return render(request, 'copo/copo_tokens.html', {})

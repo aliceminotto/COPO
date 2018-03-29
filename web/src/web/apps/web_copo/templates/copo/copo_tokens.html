@@ -63,7 +63,7 @@
                 <a class="btn btn-default" href="{% url 'copo:agave_delete_token' %}">Delete Cyverse Token</a>
             {% else %}
                 <img src="{% static "copo/img/cyverse.png" %}"/>
-                <a target="_blank" class="btn btn-default" href="{% url 'copo:agave_oauth' %}">Log into CyVerse</a>
+                <a class="btn btn-default" href="{% url 'copo:agave_oauth' %}">Log into CyVerse</a>
             {% endif %}
         </p>
 

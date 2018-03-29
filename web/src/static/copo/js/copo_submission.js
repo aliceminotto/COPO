@@ -197,6 +197,7 @@ function handle_upload(e) {
                     dataType: 'json'
                 }).done(function (data) {
                     get_dataset_data()
+
                     if (data.status == 1) {
                         // we have uploaded the file, so change table row
                         $(tr).find('.progress-bar').css('width', '100%')

@@ -22,6 +22,6 @@ def add_partial_submissions_to_context(request):
 def check_cyverse_token(request):
     token = OAuthToken().cyverse_get_token(request.user.id)
     if token:
-        return {'cyverse_token': token}
+        return {'cyverse_token': True}
     else:
         return {}
