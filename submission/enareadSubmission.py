@@ -684,6 +684,7 @@ class EnaReads:
                 result['status'] = False
                 result['message'] = "Couldn't release project due to the following errors: "
                 errors = root.findall('.//ERROR')
+
                 if errors:
                     error_text = str()
                     for e in errors:
